@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  ckd-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"  # Next.js frontend
+      - "8000:8000"  # FastAPI backend
+    volumes:
+      - ./models:/app/models  # Mount models directory
+      - ./data:/app/data      # Mount data directory
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
