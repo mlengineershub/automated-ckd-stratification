@@ -4,8 +4,9 @@ import { useState } from "react"
 import type { Alert } from "@/lib/alert-system/alert-generator"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ChevronDown, ChevronUp, CheckCircle, AlertTriangle, AlertCircle, Clock } from "lucide-react"
+import { ChevronDown, ChevronUp, CheckCircle, AlertTriangle, AlertCircle, Clock, FileDown } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { generateNephrologyReferral, generateTestOrder } from "@/lib/pdf-generator/templates"
 
 interface AlertCardProps {
   alert: Alert
@@ -49,6 +50,82 @@ export default function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
     }
   }
 
+  // Determine if this alert needs a nephrology referral
+  const needsNephrologyReferral = () => {
+    // Check if any recommendation mentions nephrology referral
+    return alert.recommendations.some(rec => 
+      rec.toLowerCase().includes("nephrology referral") || 
+      rec.toLowerCase().includes("refer to nephrology")
+    );
+  }
+
+  // Determine if this alert is about a missing test
+  const needsTestOrder = () => {
+    return alert.category === "Test" && alert.title.toLowerCase().includes("overdue test");
+  }
+
+  // Extract test name from alert title
+  const getTestName = () => {
+    if (!needsTestOrder()) return "";
+    const match = alert.title.match(/Overdue Test: (.+)/);
+    return match ? match[1] : "";
+  }
+
+  // Handle nephrology referral download
+  const handleNephrologyReferralDownload = () => {
+    // Extract eGFR value if present in the description
+    let eGFR: number | undefined;
+    const eGFRMatch = alert.description.match(/eGFR \((\d+(\.\d+)?)\)/);
+    if (eGFRMatch) {
+      eGFR = parseFloat(eGFRMatch[1]);
+    }
+
+    // Extract uACR value if present in the description
+    let uACR: number | undefined;
+    const uACRMatch = alert.description.match(/uACR \((\d+(\.\d+)?)\)/);
+    if (uACRMatch) {
+      uACR = parseFloat(uACRMatch[1]);
+    }
+
+    // Generate the PDF
+    const pdfDataUri = generateNephrologyReferral(
+      alert.patientName,
+      alert.patientId,
+      eGFR,
+      uACR,
+      alert.title
+    );
+
+    // Create a download link and trigger it
+    const link = document.createElement('a');
+    link.href = pdfDataUri;
+    link.download = `nephrology_referral_${alert.patientId}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  // Handle test order download
+  const handleTestOrderDownload = () => {
+    const testName = getTestName();
+    
+    // Generate the PDF
+    const pdfDataUri = generateTestOrder(
+      alert.patientName,
+      alert.patientId,
+      testName,
+      alert.recommendations.find(rec => rec.includes("Rationale:"))
+    );
+
+    // Create a download link and trigger it
+    const link = document.createElement('a');
+    link.href = pdfDataUri;
+    link.download = `test_order_${testName.replace(/\s+/g, '_').toLowerCase()}_${alert.patientId}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   return (
     <Card
       className={`mb-4 border-l-4 ${alert.acknowledged ? "border-l-gray-300" : `border-l-${alert.priority.toLowerCase()}`}`}
@@ -79,7 +156,7 @@ export default function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
           </div>
         )}
       </CardContent>
-      <CardFooter className="pt-0 flex justify-between">
+      <CardFooter className="pt-0 flex flex-wrap justify-between gap-2">
         <Button variant="ghost" size="sm" onClick={() => setExpanded(!expanded)} className="text-xs flex items-center">
           {expanded ? (
             <>
@@ -94,19 +171,46 @@ export default function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
           )}
         </Button>
 
-        {!alert.acknowledged && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onAcknowledge(alert.id)}
-            className="text-xs flex items-center"
-          >
-            <CheckCircle className="h-4 w-4 mr-1" />
-            Acknowledge
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {/* Nephrology Referral Download Button */}
+          {needsNephrologyReferral() && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleNephrologyReferralDownload}
+              className="text-xs flex items-center"
+            >
+              <FileDown className="h-4 w-4 mr-1" />
+              Referral PDF
+            </Button>
+          )}
+
+          {/* Test Order Download Button */}
+          {needsTestOrder() && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTestOrderDownload}
+              className="text-xs flex items-center"
+            >
+              <FileDown className="h-4 w-4 mr-1" />
+              Test Order PDF
+            </Button>
+          )}
+
+          {!alert.acknowledged && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onAcknowledge(alert.id)}
+              className="text-xs flex items-center"
+            >
+              <CheckCircle className="h-4 w-4 mr-1" />
+              Acknowledge
+            </Button>
+          )}
+        </div>
       </CardFooter>
     </Card>
   )
 }
-
