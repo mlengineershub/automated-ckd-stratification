@@ -25,24 +25,22 @@ llm = Llama(
 )
 
 
-async def generate_tokens(prompt: str):
-    """Générateur de tokens pour le streaming"""
-    stream = llm.create_completion(
+async def generate_text(prompt: str):
+    """Generate complete text response"""
+    response = llm.create_completion(
         prompt,
         max_tokens=512,
-        stream=True,
+        stream=False,
         temperature=0.7,
         top_p=0.9
     )
     
-    for output in stream:
-        token = output["choices"][0]["text"]
-        yield {"data": token}
+    return response["choices"][0]["text"]
 
 
 @app.post("/generate_rag")
-async def generate_text(request: Request):
-    """Endpoint pour générer du texte en streaming"""
+async def generate_rag_text(request: Request):
+    """Endpoint to generate text with RAG context"""
     data = await request.json()
     prompt = data.get("prompt", "")
     
@@ -64,18 +62,18 @@ You have to be concise and clear and speed at the third person (e.g The patient 
 # Patient information
 {prompt}
 """
-    return EventSourceResponse(generate_tokens(whole_prompt))
+    return await generate_text(whole_prompt)
 
 @app.post("/generate")
-async def generate_text(request: Request):
-    """Endpoint pour générer du texte en streaming"""
+async def generate_simple_text(request: Request):
+    """Endpoint to generate text without RAG context"""
     data = await request.json()
     prompt = data.get("prompt", "")
     
     if not prompt:
         return {"error": "Prompt is required"}
     
-    return EventSourceResponse(generate_tokens(prompt))
+    return await generate_text(prompt)
 
 
 
