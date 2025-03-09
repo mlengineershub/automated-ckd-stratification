@@ -1,4 +1,5 @@
 "use client"
+import path from 'path'
 
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,27 +22,6 @@ const getRiskLabel = (value: number) => {
   }
 }
 
-// Fetch patient data from API
-const fetchPatientData = async (patientId: string) => {
-  try {
-    const response = await fetch(`/api/patient-data?patientId=${patientId}`)
-    if (!response.ok) {
-      throw new Error('Failed to fetch patient data')
-    }
-    const data = await response.json()
-    return data.map((entry: any) => ({
-      ...entry,
-      riskLabel: getRiskLabel(entry.riskValue)
-    }))
-  } catch (error) {
-    console.error('Error fetching patient data:', error)
-    return []
-  }
-}
-
-// Base de données des patients
-const patientsDatabase: Record<string, any> = {}
-
 // Couleurs pour les graphiques
 const colors = {
   eGFR: "#2563eb",
@@ -51,20 +31,58 @@ const colors = {
 
 export default function RiskAssessment() {
   const [selectedPatient, setSelectedPatient] = useState<string>("1523060") // Patient par défaut
+  const [allPatientData, setAllPatientData] = useState<any[]>([])
   const [patientData, setPatientData] = useState<any[]>([])
+
+  // Parse CSV data into patient entries
+  const parseCSVData = (data: string) => {
+    const lines = data.split('\n')
+    return lines.slice(1).map(line => {
+      const [patient, date, eGFR, uACR, risk] = line.split(',')
+      return {
+        patientId: patient,
+        date,
+        eGFR: eGFR ? parseFloat(eGFR) : null,
+        uACR: uACR ? parseFloat(uACR) : null,
+        riskValue: risk ? parseInt(risk) : null,
+        riskLabel: getRiskLabel(risk ? parseInt(risk) : 1)
+      }
+    })
+  }
+
+  // Load and parse CSV data
+  const loadCSVData = async () => {
+    try {
+      const response = await fetch('/data/cleaned_data.csv')
+      if (!response.ok) {
+        throw new Error('Failed to fetch CSV data')
+      }
+      const data = await response.text()
+      const parsedData = parseCSVData(data)
+      setAllPatientData(parsedData)
+      
+      // Get unique patient IDs
+      const patientIds = [...new Set(parsedData.map(entry => entry.patientId))]
+      setSelectedPatient(patientIds[0]) // Set the first patient ID as the default
+    } catch (error) {
+      console.error('Error loading CSV data:', error)
+    }
+  }
+
+  // Load data on component mount
+  useEffect(() => {
+    loadCSVData()
+  }, [])
 
   // Update patient data when selection changes
   useEffect(() => {
-    const loadData = async () => {
-      if (!patientsDatabase[selectedPatient]) {
-        const data = await fetchPatientData(selectedPatient)
-        patientsDatabase[selectedPatient] = data
-      }
-      setPatientData(patientsDatabase[selectedPatient])
+    if (selectedPatient && allPatientData.length > 0) {
+      const filteredData = allPatientData
+        .filter(entry => entry.patientId === selectedPatient)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      setPatientData(filteredData)
     }
-    
-    loadData()
-  }, [selectedPatient])
+  }, [selectedPatient, allPatientData])
 
   return (
     <div className="container mx-auto p-4">
@@ -76,7 +94,10 @@ export default function RiskAssessment() {
             <SelectValue placeholder="Select patient" />
           </SelectTrigger>
           <SelectContent>
-            {Object.keys(patientsDatabase).map((id) => (
+            {[...new Set(allPatientData
+              .map(entry => entry.patientId)
+              .filter(id => id && id.trim() !== '')
+            )].map((id) => (
               <SelectItem key={id} value={id}>
                 Patient {id}
               </SelectItem>

@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const csvPath = path.join(process.cwd(), '..', 'data', 'stats.csv')
+    const csvPath = path.join(process.cwd(), 'public', 'data', 'cleaned_data.csv')
     
     if (!existsSync(csvPath)) {
       return NextResponse.json(
