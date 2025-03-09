@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from llama_cpp import Llama
+import pickle
+import os
 from sse_starlette.sse import EventSourceResponse
 from retrieve import retrieve_top_chunks
 
@@ -23,6 +25,17 @@ llm = Llama(
     n_threads=4,
     verbose=False
 )
+
+# Load machine learning models
+MODELS_DIR = "./models"
+models = {}
+
+# Load each model from the models directory
+for model_file in os.listdir(MODELS_DIR):
+    if model_file.endswith(".pkl"):
+        model_name = os.path.splitext(model_file)[0]
+        with open(os.path.join(MODELS_DIR, model_file), "rb") as f:
+            models[model_name] = pickle.load(f)
 
 
 async def generate_text(prompt: str):
@@ -63,6 +76,27 @@ You have to be concise and clear and speed at the third person (e.g The patient 
 {prompt}
 """
     return await generate_text(whole_prompt)
+
+@app.post("/predict")
+async def predict(request: Request):
+    """Endpoint for model predictions"""
+    data = await request.json()
+    model_type = data.get("type")
+    measurement = data.get("measurement")
+    
+    if not model_type or not measurement:
+        return {"error": "Both 'type' and 'measurement' are required"}
+        
+    if model_type not in models:
+        return {"error": f"Model type '{model_type}' not found"}
+        
+    try:
+        # Get probability of class 1
+        model = models[model_type]
+        probability = model.predict_proba([[measurement]])[0][1]
+        return {"probability": float(probability)}
+    except Exception as e:
+        return {"error": f"Prediction failed: {str(e)}"}
 
 @app.post("/generate")
 async def generate_simple_text(request: Request):

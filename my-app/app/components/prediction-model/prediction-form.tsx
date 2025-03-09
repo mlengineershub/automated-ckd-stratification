@@ -1,82 +1,147 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Checkbox } from "@/components/ui/checkbox"
-import { type PatientData, type PredictionResult, predictCKDRisk } from "@/lib/prediction-model/model-interface"
 import { Progress } from "@/components/ui/progress"
+import { useToast } from "@/components/ui/use-toast"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+
+interface PredictionResult {
+  probability: number
+}
+
+interface TestData {
+  patientId: string
+  date: Date
+  test: string
+  value: number
+  unit: string
+}
 
 export default function PredictionForm() {
-  const [patientData, setPatientData] = useState<PatientData>({
-    age: 0,
-    gender: "male",
-    hasDiabetes: false,
-    hasHypertension: false,
-    bmi: 0,
-    systolicBP: 0,
-    diastolicBP: 0,
-  })
-
+  const [allTestData, setAllTestData] = useState<TestData[]>([])
+  const [selectedPatient, setSelectedPatient] = useState<string>("")
   const [prediction, setPrediction] = useState<PredictionResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [latestTest, setLatestTest] = useState<TestData | null>(null)
 
-  const handleInputChange = (field: string, value: any) => {
-    setPatientData((prev) => ({
-      ...prev,
-      [field]: value,
-    }))
+  const { addToast } = useToast();
+
+  // Parse CSV data into test entries
+  const parseCSVData = (data: string) => {
+    const lines = data.split('\n')
+    return lines.slice(1).filter(line => line.trim() !== '').map(line => {
+      const [id, date, test, value, raw_info, unit] = line.split(',')
+      return {
+        patientId: id,
+        date: new Date(date), // Convert to Date object for sorting
+        test,
+        value: parseFloat(value),
+        unit
+      }
+    })
   }
 
-  const handleNumberInput = (field: string, value: string) => {
-    const numValue = value === "" ? 0 : Number(value)
-    handleInputChange(field, numValue)
-  }
-
-  const handleSubmit = async () => {
-    setIsLoading(true)
+  // Load and parse CSV data
+  const loadCSVData = async () => {
     try {
-      const result = await predictCKDRisk(patientData)
+      const response = await fetch('/data/cleaned_labs.csv')
+      if (!response.ok) {
+        throw new Error('Failed to fetch CSV data')
+      }
+      const data = await response.text()
+      const parsedData = parseCSVData(data)
+      setAllTestData(parsedData)
+      
+      // Get unique patient IDs
+      const patientIds = [...new Set(parsedData.map(entry => entry.patientId))]
+      
+      if (patientIds.length > 0) {
+        setSelectedPatient(patientIds[0]) // Set the first patient ID as the default
+      }
+    } catch (error) {
+      console.error('Error loading CSV data:', error)
+      addToast({
+        title: "Error loading patient data",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive"
+      })
+    }
+  }
+
+  // Load data on component mount
+  useEffect(() => {
+    loadCSVData()
+  }, [])
+
+  // Update latest test when patient selection changes
+  useEffect(() => {
+    if (selectedPatient && allTestData.length > 0) {
+      // Filter tests for the selected patient
+      const patientTests = allTestData.filter(
+        item => item.patientId === selectedPatient
+      )
+      
+      // Sort by date (newest first) and get the latest test
+      const sortedTests = patientTests.sort((a, b) => 
+        b.date.getTime() - a.date.getTime()
+      )
+      
+      setLatestTest(sortedTests.length > 0 ? sortedTests[0] : null)
+    } else {
+      setLatestTest(null)
+    }
+  }, [selectedPatient, allTestData])
+
+  const handlePredict = async () => {
+    if (!selectedPatient || !latestTest) {
+      addToast({
+        title: "Missing data",
+        description: "Please select a patient and test type",
+        variant: "destructive"
+      })
+      return
+    }
+    
+    setIsLoading(true)
+    setPrediction(null)
+    
+    try {
+      // Send prediction request to the backend
+      const response = await fetch("http://0.0.0.0:8000/predict", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          type: latestTest.test,
+          measurement: latestTest.value
+        })
+      })
+      
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Prediction failed: ${errorText}`)
+      }
+      
+      const result = await response.json()
+      console.log("Prediction result:", result)
       setPrediction(result)
     } catch (error) {
       console.error("Prediction error:", error)
-      alert("Error making prediction. Please try again.")
+      addToast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to get prediction",
+        variant: "destructive"
+      })
     } finally {
       setIsLoading(false)
     }
   }
 
-  const resetForm = () => {
-    setPatientData({
-      age: 0,
-      gender: "male",
-      hasDiabetes: false,
-      hasHypertension: false,
-      bmi: 0,
-      systolicBP: 0,
-      diastolicBP: 0,
-    })
-    setPrediction(null)
-  }
-
-  // Get color for risk category
-  const getRiskColor = (risk: string) => {
-    switch (risk) {
-      case "Low":
-        return "bg-green-500"
-      case "Moderate":
-        return "bg-yellow-500"
-      case "High":
-        return "bg-orange-500"
-      case "Very High":
-        return "bg-red-500"
-      default:
-        return "bg-gray-500"
-    }
-  }
+  const probability = prediction ? prediction.probability * 100 : 0
+  const riskLevel = probability < 30 ? 'Low Risk' : probability < 70 ? 'Moderate Risk' : 'High Risk'
+  const riskColor = probability < 30 ? 'bg-green-500' : probability < 70 ? 'bg-yellow-500' : 'bg-red-500'
 
   return (
     <div className="container mx-auto p-4">
@@ -85,198 +150,97 @@ export default function PredictionForm() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Patient Data</CardTitle>
+            <CardTitle>Patient Test Selection</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="age">Age (years)</Label>
-                  <Input
-                    id="age"
-                    type="number"
-                    value={patientData.age || ""}
-                    onChange={(e) => handleNumberInput("age", e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="gender">Gender</Label>
-                  <RadioGroup
-                    id="gender"
-                    value={patientData.gender}
-                    onValueChange={(value) => handleInputChange("gender", value)}
-                    className="flex space-x-4 pt-2"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="male" id="male" />
-                      <Label htmlFor="male">Male</Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="female" id="female" />
-                      <Label htmlFor="female">Female</Label>
-                    </div>
-                  </RadioGroup>
-                </div>
-              </div>
-
               <div className="space-y-2">
-                <Label>Medical History</Label>
-                <div className="flex space-x-4">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="hasDiabetes"
-                      checked={patientData.hasDiabetes}
-                      onCheckedChange={(checked) => handleInputChange("hasDiabetes", checked === true)}
-                    />
-                    <Label htmlFor="hasDiabetes">Diabetes</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="hasHypertension"
-                      checked={patientData.hasHypertension}
-                      onCheckedChange={(checked) => handleInputChange("hasHypertension", checked === true)}
-                    />
-                    <Label htmlFor="hasHypertension">Hypertension</Label>
-                  </div>
-                </div>
+                <label className="text-sm font-medium">Patient ID</label>
+                <Select onValueChange={setSelectedPatient} value={selectedPatient}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a patient" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[...new Set(allTestData
+                      .map(entry => entry.patientId)
+                      .filter(id => id && id.trim() !== '')
+                    )].map((id) => (
+                      <SelectItem key={id} value={id}>
+                        Patient {id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+              
+              {latestTest && (
+                <div className="p-3 bg-gray-50 rounded-md">
+                  <p className="text-sm font-medium">Selected Test Value</p>
+                  <p className="text-lg">
+                    {latestTest.value} {latestTest.unit} ({latestTest.test})
+                  </p>
+                </div>
+              )}
 
-              <div>
-                <Label htmlFor="bmi">BMI (kg/m²)</Label>
-                <Input
-                  id="bmi"
-                  type="number"
-                  step="0.1"
-                  value={patientData.bmi || ""}
-                  onChange={(e) => handleNumberInput("bmi", e.target.value)}
-                />
-              </div>
+              <button
+                onClick={handlePredict}
+                disabled={!selectedPatient || !latestTest || isLoading}
+                className="w-full bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+              >
+                {isLoading ? "Predicting..." : "Get Prediction"}
+              </button>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="systolicBP">Systolic BP (mmHg)</Label>
-                  <Input
-                    id="systolicBP"
-                    type="number"
-                    value={patientData.systolicBP || ""}
-                    onChange={(e) => handleNumberInput("systolicBP", e.target.value)}
-                  />
+              {isLoading && (
+                <div className="space-y-2 animate-pulse">
+                  <p className="text-sm text-gray-600">Analyzing test results...</p>
+                  <Progress value={50} className="w-full bg-gray-200" />
+                  <p className="text-xs text-gray-500">This may take a few seconds</p>
                 </div>
-                <div>
-                  <Label htmlFor="diastolicBP">Diastolic BP (mmHg)</Label>
-                  <Input
-                    id="diastolicBP"
-                    type="number"
-                    value={patientData.diastolicBP || ""}
-                    onChange={(e) => handleNumberInput("diastolicBP", e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="eGFR">eGFR (optional)</Label>
-                  <Input
-                    id="eGFR"
-                    type="number"
-                    step="0.1"
-                    value={patientData.eGFR || ""}
-                    onChange={(e) => handleNumberInput("eGFR", e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="uACR">uACR (optional)</Label>
-                  <Input
-                    id="uACR"
-                    type="number"
-                    step="0.1"
-                    value={patientData.uACR || ""}
-                    onChange={(e) => handleNumberInput("uACR", e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="flex space-x-4 pt-4">
-                <Button onClick={handleSubmit} disabled={isLoading}>
-                  {isLoading ? "Processing..." : "Predict CKD Risk"}
-                </Button>
-                <Button variant="outline" onClick={resetForm}>
-                  Reset
-                </Button>
-              </div>
+              )}
             </div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Prediction Results</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-4 py-8">
-                <p className="text-center">Analyzing patient data...</p>
-                <Progress value={45} className="w-full" />
-              </div>
-            ) : prediction ? (
-              <div className="space-y-6">
-                <div className="text-center p-6 rounded-lg border">
-                  <p className="text-sm text-gray-500 mb-1">CKD Risk Probability</p>
-                  <p className="text-4xl font-bold mb-2">{(prediction.probability * 100).toFixed(1)}%</p>
-                  <div
-                    className={`inline-block px-3 py-1 rounded-full text-white ${getRiskColor(prediction.riskCategory)}`}
-                  >
-                    {prediction.riskCategory} Risk
+        {prediction && (
+          <Card>
+            <CardHeader>
+              <CardTitle>CKD Risk Assessment</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-center p-6 rounded-lg border border-gray-100 shadow-sm">
+                <p className="text-sm text-gray-500 mb-1">Risk Probability</p>
+                <p className="text-4xl font-bold mb-2">
+                  {probability.toFixed(1)}%
+                </p>
+                <div className="w-full h-6 bg-gray-100 rounded-full mt-4 relative overflow-hidden">
+                  <div 
+                    className={`h-full ${riskColor} transition-all duration-500`}
+                    style={{ width: `${probability}%` }}
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-sm font-medium text-white drop-shadow-md">
+                      {riskLevel}
+                    </span>
                   </div>
-                  <p className="text-sm mt-2">Confidence: {(prediction.confidenceScore * 100).toFixed(0)}%</p>
                 </div>
-
-                <div>
-                  <h3 className="font-semibold mb-3">Key Risk Factors:</h3>
-                  <ul className="space-y-3">
-                    {prediction.topFeatures.map((feature, index) => (
-                      <li key={index} className="flex items-center justify-between border rounded-md p-3">
-                        <div>
-                          <p className="font-medium">{feature.feature}</p>
-                          <p className="text-sm text-gray-600">
-                            Value: {typeof feature.value === "boolean" ? (feature.value ? "Yes" : "No") : feature.value}
-                          </p>
-                        </div>
-                        <div
-                          className={`text-sm ${feature.direction === "increases risk" ? "text-red-500" : "text-green-500"}`}
-                        >
-                          {feature.direction}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div>
-                  <h3 className="font-semibold mb-3">Recommended Actions:</h3>
-                  <ul className="list-disc pl-5 space-y-1">
-                    {prediction.recommendedActions.map((action, index) => (
-                      <li key={index} className="text-gray-700 dark:text-gray-300">
-                        {action}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-64 border rounded-md border-dashed">
-                <div className="text-center text-gray-500">
-                  <p className="mb-2">Enter patient data to predict CKD risk</p>
-                  <p className="text-sm">
-                    The model will analyze risk factors and provide personalized recommendations
+                
+                <div className="mt-6 p-4 bg-gray-50 rounded-md text-left">
+                  <h3 className="font-medium mb-2">Assessment Details</h3>
+                  <p className="text-sm text-gray-600 mb-1">
+                    <span className="font-medium">Patient ID:</span> {selectedPatient}
+                  </p>
+                  <p className="text-sm text-gray-600 mb-1">
+                    <span className="font-medium">Test Type:</span> {latestTest?.test}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    <span className="font-medium">Test Value:</span> {latestTest?.value} {latestTest?.unit}
                   </p>
                 </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   )
 }
-
