@@ -172,3 +172,7 @@ cython_debug/
 
 *.db
 *.csv
+
+*.pkl
+
+*.ipynb
